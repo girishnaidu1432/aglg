@@ -129,11 +129,13 @@ def generate_statistics() -> str:
     return df.to_string(index=False)
 
 
-# --- Helper to Ask LLM for Yes/No Confirmation ---
-def ask_llm(prompt: str) -> bool:
-    response = llm.predict(prompt + " (Reply Yes or No only)")
-    st.markdown(f"🤖 **LLM:** {response}")
-    return response.strip().lower().startswith("yes")
+def ask_llm(prompt):
+    try:
+        response = llm.predict(prompt + " (Reply Yes or No only)")
+        return "yes" in response.lower()
+    except Exception as e:
+        print(f"LLM error: {e}")
+        return input(f"{prompt} (yes/no): ").strip().lower() == "yes"
 
 
 # --- UI ---
