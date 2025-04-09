@@ -154,8 +154,8 @@ agent = initialize_agent(
 )
 
 # ✅ Streamlit UI
-st.set_page_config(page_title="📈 Stock Insights with LLM", layout="centered")
-st.title("📈 Stock Insight Agent using LLM & SerpAPI")
+st.set_page_config(page_title="📈 Stock Insights with Agentic AI LLM", layout="centered")
+st.title("📈 AGENTIC AI")
 
 with st.form("stock_form"):
     ticker = st.text_input("Enter Stock Ticker or Company Name", value="Tesla")
