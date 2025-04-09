@@ -3,3 +3,7 @@ langgraph
 openai
 langchain-openai
 streamlit
+pandas
+beautifulsoup4
+numpy 
+requests
