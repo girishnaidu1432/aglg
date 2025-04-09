@@ -1,21 +1,20 @@
 import streamlit as st
 import datetime
+import re
 import requests
 import numpy as np
 import pandas as pd
-import re
-import json
 from bs4 import BeautifulSoup
-
 from typing import List, Dict
-from langchain.tools import Tool
+from langchain.tools import tool
 from langchain.agents import initialize_agent, AgentType
+from langchain.tools import Tool
 from langchain.chat_models import AzureChatOpenAI
 from langchain.document_loaders import WebBaseLoader
 
-# === Azure OpenAI Config ===
-openai_api_key = "14560021aaf84772835d76246b53397a"
-openai_api_base = "https://amrxgenai.openai.azure.com/"
+# --- Azure OpenAI Configuration ---
+openai_api_key = "your-openai-key"
+openai_api_base = "https://your-azure-openai-endpoint/"
 openai_api_type = "azure"
 openai_api_version = "2024-02-15-preview"
 deployment_name = "gpt"
@@ -29,10 +28,10 @@ llm = AzureChatOpenAI(
     temperature=0.5
 )
 
-# === SERP API Config ===
-SERP_API_KEY = "2a13a66e8fb69ceba7c25e8dfc4db1932d86c259d237114131a2146131dd7b4c"
+# --- SERP API Key ---
+SERP_API_KEY = "your-serp-api-key"
 
-# === Global State ===
+# --- Initialize Session State ---
 if "state" not in st.session_state:
     st.session_state.state = {
         "ticker": "",
@@ -40,43 +39,40 @@ if "state" not in st.session_state:
         "results": [],
         "scraped_data": [],
         "validated_data": "",
-        "stats_data": ""
+        "stats_data": "",
+        "search_done": False,
+        "scrape_done": False,
+        "validate_done": False,
+        "stats_done": False
     }
 
 state = st.session_state.state
 
-# === Tool 1: SERP Search ===
+# --- Tools Definition ---
+@tool
 def serp_search_tool(query: str, num_results: int = 5) -> List[Dict]:
-    st.info(f"🔍 Searching Google for: {query}")
     params = {
         "engine": "google",
         "q": query,
         "api_key": SERP_API_KEY,
         "num": num_results
     }
-
     response = requests.get("https://serpapi.com/search", params=params)
     if response.status_code != 200:
-        st.error("❌ SERP API request failed.")
-        return []
-
+        return [{"error": "Failed to fetch SERP API results"}]
     data = response.json()
     results = []
-
     for item in data.get("organic_results", [])[:num_results]:
-        results.append({
-            "title": item.get("title", "No Title"),
-            "link": item.get("link", "No Link"),
-            "snippet": item.get("snippet", "No Snippet")
-        })
-
+        title = item.get("title", "No Title")
+        link = item.get("link", "No Link")
+        snippet = item.get("snippet", "No Snippet")
+        results.append({"title": title, "link": link, "snippet": snippet})
     state["results"] = results
     return results
 
-# === Tool 2: Web Scraper ===
+@tool
 def scrape_web_pages(_: str = "") -> List[Dict]:
     scraped_data = []
-
     for res in state["results"]:
         url = res["link"]
         try:
@@ -84,51 +80,40 @@ def scrape_web_pages(_: str = "") -> List[Dict]:
             doc = loader.load()
             soup = BeautifulSoup(doc[0].page_content, "html.parser")
             full_content = soup.get_text(separator="\n")
-
             ticker_match = re.search(r'\b[A-Z]{2,5}\b', full_content)
             ticker = ticker_match.group(0) if ticker_match else "N/A"
-
             price_match = re.search(r'\$\d{1,5}(\.\d{1,2})?', full_content)
             price = price_match.group(0) if price_match else "N/A"
-
             date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            scraped_data.append({
-                "url": url, "date": date,
-                "ticker": ticker, "price": price
-            })
+            scraped_data.append({"url": url, "date": date, "ticker": ticker, "price": price})
         except Exception as e:
             scraped_data.append({"url": url, "error": str(e), "ticker": "N/A", "price": "N/A"})
-
     state["scraped_data"] = scraped_data
     return scraped_data
 
-# === Tool 3: Validation ===
+@tool
 def validate_data(_: str = "") -> str:
     if not state["scraped_data"]:
         return "No data available for validation."
-
     df = pd.DataFrame(state["scraped_data"])
     state["validated_data"] = df.to_json(orient="records")
-    return df
+    return df.to_string(index=False)
 
-# === Tool 4: Statistics ===
+@tool
 def generate_statistics(_: str = "") -> str:
     if not state["scraped_data"]:
         return "No data available for stats."
-
     stats = []
     for item in state["scraped_data"]:
         try:
             price = float(item.get("price", "N/A").replace("$", "").replace(",", ""))
         except:
             price = None
-
         if price:
-            hist_prices = np.random.uniform(price * 0.9, price * 1.1, 20)
+            hist_prices = np.random.uniform(low=price * 0.9, high=price * 1.1, size=20)
             sma = np.mean(hist_prices)
             ema = np.average(hist_prices, weights=np.linspace(1, 0, len(hist_prices)))
             std_dev = np.std(hist_prices)
-
             stats.append({
                 "URL": item["url"],
                 "Ticker": item["ticker"],
@@ -137,65 +122,57 @@ def generate_statistics(_: str = "") -> str:
                 "EMA": f"${ema:.2f}",
                 "Std Dev": f"${std_dev:.2f}"
             })
-
     df_stats = pd.DataFrame(stats)
     state["stats_data"] = df_stats.to_json(orient="records")
-    return df_stats
+    return df_stats.to_string(index=False)
 
-# === Tools & Agent Registration ===
-tools = [
-    Tool(name="GoogleSearch", func=serp_search_tool, description="Search Google via SerpAPI for stock news"),
-    Tool(name="ScrapePages", func=scrape_web_pages, description="Scrape URLs for ticker and price info"),
-    Tool(name="ValidateData", func=validate_data, description="Validate and tabulate scraped stock data"),
-    Tool(name="GenerateStats", func=generate_statistics, description="Compute SMA, EMA, and Std Dev of prices")
-]
+# --- UI Layout ---
+st.title("📊 Agentic Stock Insight Tool with Human-in-the-Loop")
 
-agent = initialize_agent(
-    tools=tools,
-    llm=llm,
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-    verbose=True
-)
+# --- Step 1: User Input ---
+with st.expander("🔧 Input Configuration", expanded=True):
+    state["ticker"] = st.text_input("Enter stock ticker or company name:", value=state.get("ticker", ""))
+    state["num_results"] = st.number_input("Number of search results:", min_value=1, max_value=10, value=state.get("num_results", 5))
+    if st.button("🔍 Run Google Search"):
+        serp_search_tool(state["ticker"], state["num_results"])
+        state["search_done"] = True
 
-# === Streamlit UI ===
-st.set_page_config(page_title="Stock News Agent", layout="wide")
-st.title("📊 Stock Intelligence Agent with Human-in-the-Loop")
+# --- Step 2: Show Search Results ---
+if state["search_done"]:
+    st.subheader("🔍 Google Search Results")
+    st.json(state["results"])
 
-with st.sidebar:
-    state["ticker"] = st.text_input("🔎 Enter stock ticker or company name", value="Tesla")
-    state["num_results"] = st.slider("Number of search results", 1, 10, 5)
+# --- Step 3: Human-in-the-loop for Scraping ---
+if state["search_done"]:
+    scrape_decision = st.radio("📥 Proceed to scrape these web pages?", ("Yes", "No"), key="scrape")
+    if scrape_decision == "Yes" and not state["scrape_done"]:
+        scrape_web_pages()
+        state["scrape_done"] = True
 
-    if st.button("🚀 Start Agent Task"):
-        st.session_state.run_task = True
-    else:
-        st.session_state.run_task = False
+if state["scrape_done"]:
+    st.subheader("🧾 Scraped Data")
+    st.dataframe(pd.DataFrame(state["scraped_data"]))
 
-if st.session_state.get("run_task"):
+# --- Step 4: Human-in-the-loop for Validation ---
+if state["scrape_done"]:
+    validate_decision = st.radio("✅ Proceed to validate scraped data?", ("Yes", "No"), key="validate")
+    if validate_decision == "Yes" and not state["validate_done"]:
+        validate_data()
+        state["validate_done"] = True
 
-    st.markdown(f"### 1️⃣ Google Search for: **{state['ticker']}**")
-    results = serp_search_tool(state["ticker"], state["num_results"])
-    st.json(results)
+if state["validate_done"]:
+    st.subheader("📋 Validated Table")
+    df = pd.read_json(state["validated_data"])
+    st.dataframe(df)
 
-    if st.radio("Proceed to scrape web pages?", ("Yes", "No")) == "Yes":
-        st.markdown("### 2️⃣ Scraped Web Data")
-        scraped = scrape_web_pages()
-        st.dataframe(pd.DataFrame(scraped))
+# --- Step 5: Human-in-the-loop for Stats ---
+if state["validate_done"]:
+    stats_decision = st.radio("📈 Generate statistical insights (SMA, EMA, Std Dev)?", ("Yes", "No"), key="stats")
+    if stats_decision == "Yes" and not state["stats_done"]:
+        generate_statistics()
+        state["stats_done"] = True
 
-        if st.radio("Proceed to validate data?", ("Yes", "No")) == "Yes":
-            st.markdown("### 3️⃣ Validated Data")
-            validated = validate_data()
-            st.dataframe(validated)
-
-            if st.radio("Proceed to generate stats?", ("Yes", "No")) == "Yes":
-                st.markdown("### 4️⃣ Statistical Summary")
-                stats = generate_statistics()
-                st.dataframe(stats)
-
-                st.success("🎯 Task Complete. All steps finished.")
-            else:
-                st.warning("⏭️ Stats generation skipped.")
-        else:
-            st.warning("⏭️ Validation skipped.")
-    else:
-        st.warning("⏭️ Scraping skipped.")
-
+if state["stats_done"]:
+    st.subheader("📊 Statistical Summary")
+    df_stats = pd.read_json(state["stats_data"])
+    st.dataframe(df_stats)
